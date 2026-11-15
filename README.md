@@ -28,6 +28,29 @@ dsh plugin --profile desktop add C:\path\to\dsh-skill-i18n
 
 这种方式下修改代码后，执行一次插件热重载即可生效，不需要重新安装。
 
+### 方式三：下载压缩包安装（网络受限时）
+
+有些网络环境下 `git clone` 会失败（报 `Connection was reset` 或 `Could not connect to server`），这时直接下载压缩包绕过 git 协议：
+
+```
+https://codeload.github.com/reed90911/dsh-skill-i18n/tar.gz/refs/heads/main
+```
+
+解压并安装：
+
+```powershell
+cd 下载目录
+tar -xzf dsh-skill-i18n-main.tar.gz
+dsh plugin --profile desktop add .\dsh-skill-i18n-main
+```
+
+注意两点：
+
+- 解压后的目录名通常是 `dsh-skill-i18n-main`，安装时指向它，里面要有 `package.json`
+- 换版本时重新下载再装一次即可，pnpm 会覆盖旧链接
+
+如果连 codeload 也访问不了，可以让能访问的朋友下载后把目录发给你，再执行同一条安装命令。
+
 ### 卸载
 
 ```powershell
