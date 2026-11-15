@@ -17,7 +17,9 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
@@ -117,24 +119,46 @@ function readState() {
   return { version: 1, skills: {} };
 }
 
-function writeState(state) {
-  mkdirSync(join(dshHome(), 'skill-i18n'), { recursive: true });
-  writeFileSync(stateFile(), JSON.stringify({ version: 1, skills: state.skills }, null, 2), 'utf8');
+/** 原子写：先写临时文件再 rename，避免进程中断留下半截 JSON。 */
+function writeFileAtomic(file, text) {
+  const tmp = file + '.tmp-' + process.pid + '-' + Date.now();
+  writeFileSync(tmp, text, 'utf8');
+  try {
+    renameSync(tmp, file);
+  } catch (e) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* 忽略清理失败 */
+    }
+    throw e;
+  }
 }
 
+function writeState(state) {
+  mkdirSync(join(dshHome(), 'skill-i18n'), { recursive: true });
+  writeFileAtomic(stateFile(), JSON.stringify({ version: 1, skills: state.skills }, null, 2));
+}
+
+/**
+ * 只返回 settings.json 里真实存在的键，不混入 DEFAULTS。
+ * 合并顺序由 currentSettings() 统一保证：DEFAULTS < cordis config < settings.json。
+ */
 function readSettings() {
   try {
     const j = JSON.parse(readFileSync(settingsFile(), 'utf8'));
-    if (j && typeof j === 'object') return { ...DEFAULTS, ...j };
+    if (j && typeof j === 'object') return j;
   } catch {
     /* 首次运行 */
   }
-  return { ...DEFAULTS };
+  return {};
 }
 
 function writeSettings(next) {
   mkdirSync(join(dshHome(), 'skill-i18n'), { recursive: true });
-  writeFileSync(settingsFile(), JSON.stringify(next, null, 2), 'utf8');
+  // 保留 settings.json 里已有的其它字段（例如手写的 gapMs / maxTextChars）
+  const merged = { ...readSettings(), ...next };
+  writeFileAtomic(settingsFile(), JSON.stringify(merged, null, 2));
 }
 
 function sha256(s) {
@@ -158,34 +182,74 @@ function listBackups() {
     .sort();
 }
 
+/** YAML 标量去引号：本插件写的是 JSON 双引号串，同时兼容单引号与 plain。 */
+function unquoteYamlScalar(raw) {
+  const s = raw.trim();
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+    try {
+      const v = JSON.parse(s);
+      if (typeof v === 'string') return v;
+    } catch {
+      /* 非 JSON 转义，退回手工去引号 */
+    }
+    return s.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) {
+    return s.slice(1, -1).replace(/''/g, "'");
+  }
+  return s;
+}
+
+/**
+ * 按行定位 frontmatter 里的 description 块。
+ * 不再用字符偏移：那样在 CRLF 文件里每行少算 1 字节，会把文件写坏。
+ */
 function locateDescription(text) {
-  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
-  if (!fm) return null;
-  const start = fm.index + fm[0].indexOf(fm[1]);
-  const lines = fm[1].split(/\r?\n/);
-  const idx = lines.findIndex((l) => /^description:/.test(l));
+  const eol = /\r\n/.test(text) ? '\r\n' : '\n';
+  const lines = text.split(/\r\n|\n/);
+  if (lines.length < 3) return null;
+  if (lines[0].replace(/^\ufeff/, '').trim() !== '---') return null;
+  let fmEnd = -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '---') {
+      fmEnd = i;
+      break;
+    }
+  }
+  if (fmEnd < 0) return null;
+  let idx = -1;
+  for (let i = 1; i < fmEnd; i++) {
+    if (/^description:/.test(lines[i])) {
+      idx = i;
+      break;
+    }
+  }
   if (idx < 0) return null;
   let end = idx + 1;
-  while (end < lines.length && /^\s/.test(lines[end]) && lines[end].trim() !== '') end++;
-  let offset = start;
-  for (let i = 0; i < idx; i++) offset += lines[i].length + 1;
-  return {
-    offset,
-    length: lines.slice(idx, end).join('\n').length,
-    block: lines.slice(idx, end).join('\n'),
-  };
+  while (end < fmEnd && /^\s/.test(lines[end]) && lines[end].trim() !== '') end++;
+  return { lines, eol, idx, end };
 }
 
 function getDescription(text) {
   const loc = locateDescription(text);
   if (!loc) return null;
-  return { raw: loc.block.replace(/^description:\s*/, '').trim(), loc };
+  const first = loc.lines[loc.idx].replace(/^description:\s*/, '');
+  const continuation = loc.lines.slice(loc.idx + 1, loc.end).map((l) => l.replace(/^\s+/, ''));
+  if (continuation.length > 0) {
+    // 块标量（> 或 |）按行拼回；普通多行按 YAML 规则折叠成空格
+    if (/^[>|][+-]?\s*$/.test(first.trim())) return { raw: continuation.join('\n').trim(), loc };
+    return { raw: unquoteYamlScalar([first.trim(), ...continuation].join(' ')), loc };
+  }
+  return { raw: unquoteYamlScalar(first), loc };
 }
 
+/** 写回时统一成单行双引号（YAML 与 JSON 双引号转义兼容），返回纯文本而非带引号串。 */
 function setDescription(text, value) {
   const loc = locateDescription(text);
   if (!loc) return null;
-  return text.slice(0, loc.offset) + 'description: ' + JSON.stringify(value) + text.slice(loc.offset + loc.length);
+  const encoded = 'description: ' + JSON.stringify(value);
+  const next = [...loc.lines.slice(0, loc.idx), encoded, ...loc.lines.slice(loc.end)];
+  return next.join(loc.eol);
 }
 
 function scanSkills(dir) {
@@ -246,8 +310,8 @@ export default {
     const translator = () => ctx.get('translator');
 
     function currentSettings() {
-      const s = readSettings();
-      return { ...staticOptions, ...s, skillDir };
+      // 优先级：DEFAULTS < cordis config（staticOptions）< settings.json
+      return { ...DEFAULTS, ...staticOptions, ...readSettings(), skillDir };
     }
 
     function llmRoute() {
@@ -317,9 +381,10 @@ export default {
         try {
           const providers = await tr.availableProviders();
           if (providers && providers.length) {
-            const order = ['bing', 'google', 'deepseek-account', 'deepseek-official'];
-            const picked = order.find((p) => providers.includes(p)) || providers[0];
-            return { kind: 'translator', provider: picked, tr };
+            // 只用匿名 provider（bing/google）。付费 provider 的 TranslationSpec 要求 sessionId，
+            // 插件没有会话上下文，传了会失败；这种情况下直接回退到 llm 引擎。
+            const picked = ['bing', 'google'].find((p) => providers.includes(p));
+            if (picked) return { kind: 'translator', provider: picked, tr };
           }
         } catch {
           /* 落到 llm */
@@ -375,11 +440,13 @@ export default {
             continue;
           }
           const prev = state.skills[skill.name];
+          // 还原过的技能：原文未变就不再自动翻回去。必须在翻译之前判断——
+          // 以前放在缓存分支里，而缓存分支要求 prev.original === current，带引号时永远不成立。
+          if (!force && prev && prev.restored && prev.original === current) {
+            skipped++;
+            continue;
+          }
           if (prev && prev.original === current && prev.translated && !force) {
-            if (prev.restored) {
-              skipped++;
-              continue;
-            }
             try {
               if (backupSkill(skill.name, text)) backedUp++;
               writeFileSync(skill.file, setDescription(text, prev.translated), 'utf8');
@@ -431,6 +498,9 @@ export default {
     }
 
     async function runRestore({ only = undefined, fromBackup = false } = {}) {
+      if (busy) return { ok: false, error: '已有翻译或还原任务在执行' };
+      busy = true;
+      try {
       const settings = currentSettings();
       const names = only !== undefined ? normalizeOnly(only) : normalizeOnly(settings.skills);
       const state = readState();
@@ -499,6 +569,9 @@ export default {
       }
       writeState(state);
       return { ok: true, mode: 'state', tracked: tracked.length, restored, alreadyOriginal, missing, failed, notFound };
+      } finally {
+        busy = false;
+      }
     }
 
     function runStatus() {
@@ -537,6 +610,7 @@ export default {
         chinese: zh,
         english: en,
         pending,
+        untranslated,
         glossaryCoverage: skills.filter((s) => GLOSSARY[s.name]).length,
         tracked: Object.keys(state.skills).length,
         backups: listBackups().length,
@@ -562,7 +636,13 @@ export default {
               sendJson(res, 200, { ok: true, settings: currentSettings() });
               return;
             }
-            const body = await readJsonBody(req);
+            let body;
+            try {
+              body = await readJsonBody(req);
+            } catch {
+              sendJson(res, 413, { ok: false, error: 'body-too-large' });
+              return;
+            }
             if (!body || typeof body !== 'object') {
               sendJson(res, 400, { ok: false, error: 'bad-body' });
               return;
@@ -580,7 +660,13 @@ export default {
         {
           path: '/skill-i18n/run',
           handler: async (req, res) => {
-            const body = await readJsonBody(req);
+            let body;
+            try {
+              body = await readJsonBody(req);
+            } catch {
+              sendJson(res, 413, { ok: false, error: 'body-too-large' });
+              return;
+            }
             if (!body || typeof body.action !== 'string') {
               sendJson(res, 400, { ok: false, error: 'bad-action' });
               return;
@@ -607,36 +693,39 @@ export default {
     }
 
     // ---- 工具（与设置页共用同一套逻辑）----
-    ctx.tools.register({
-      name: 'skill_i18n',
-      description:
-        '管理技能描述的中文翻译：status 查看状态，translate 翻译（skills 只翻指定技能、force 强制重译），restore 还原（skills 限定、fromBackup 用完整备份回滚）。引擎与频率在「设置 → 技能翻译」里配置。',
-      parameters: {
-        type: 'object',
-        properties: {
-          action: { type: 'string', enum: ['status', 'translate', 'restore'] },
-          skills: { type: 'array', items: { type: 'string' }, description: '只处理这些技能（省略则按设置）' },
-          force: { type: 'boolean', description: 'translate 时强制重译' },
-          fromBackup: { type: 'boolean', description: 'restore 时用完整备份覆盖' },
+    // 用 ctx.effect 包裹：插件卸载/热重载时注销工具，避免重复注册或残留旧闭包。
+    ctx.effect(() =>
+      ctx.tools.register({
+        name: 'skill_i18n',
+        description:
+          '管理技能描述的中文翻译：status 查看状态，translate 翻译（skills 只翻指定技能、force 强制重译），restore 还原（skills 限定、fromBackup 用完整备份回滚）。引擎与频率在「设置 → 技能翻译」里配置。',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['status', 'translate', 'restore'] },
+            skills: { type: 'array', items: { type: 'string' }, description: '只处理这些技能（省略则按设置）' },
+            force: { type: 'boolean', description: 'translate 时强制重译' },
+            fromBackup: { type: 'boolean', description: 'restore 时用完整备份覆盖' },
+          },
+          required: ['action'],
+          additionalProperties: false,
         },
-        required: ['action'],
-        additionalProperties: false,
-      },
-      output: {
-        schema: { type: 'object' },
-        render(args, value) {
-          return [{ type: 'text', text: JSON.stringify(value, null, 2) }];
+        output: {
+          schema: { type: 'object' },
+          render(args, value) {
+            return [{ type: 'text', text: JSON.stringify(value, null, 2) }];
+          },
         },
-      },
-      async execute(args) {
-        const action = args && args.action;
-        const skills = args && args.skills ? normalizeOnly(args.skills) : undefined;
-        if (action === 'status') return runStatus();
-        if (action === 'translate') return runTranslate({ force: Boolean(args && args.force), only: skills });
-        if (action === 'restore') return runRestore({ only: skills, fromBackup: Boolean(args && args.fromBackup) });
-        return { ok: false, error: '未知 action: ' + String(action) };
-      },
-    });
+        async execute(args) {
+          const action = args && args.action;
+          const skills = args && args.skills ? normalizeOnly(args.skills) : undefined;
+          if (action === 'status') return runStatus();
+          if (action === 'translate') return runTranslate({ force: Boolean(args && args.force), only: skills });
+          if (action === 'restore') return runRestore({ only: skills, fromBackup: Boolean(args && args.fromBackup) });
+          return { ok: false, error: '未知 action: ' + String(action) };
+        },
+      }),
+    );
 
     // ---- 启动时的一次性执行 ----
     ctx.effect(() => {
@@ -666,9 +755,14 @@ export default {
 };
 
 // ---- HTTP 小工具 ----
-async function readJsonBody(req) {
+async function readJsonBody(req, limit = 64 * 1024) {
   const chunks = [];
-  for await (const c of req) chunks.push(c);
+  let total = 0;
+  for await (const c of req) {
+    total += c.length;
+    if (total > limit) throw new Error('request body too large');
+    chunks.push(c);
+  }
   if (chunks.length === 0) return {};
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));

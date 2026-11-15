@@ -193,7 +193,7 @@ window.__ModuleLoader__.load({
           if (cfg && cfg.settings) {
             setSettings(cfg.settings);
             const sc = cfg.settings.schedule;
-            if (typeof sc === 'number') setCustomMinutes(String(sc));
+            if (typeof sc === 'number' && sc > 0) setCustomMinutes(String(sc));
             setSkillInput((cfg.settings.skills || []).join(', '));
           }
         } catch (e) {
@@ -247,7 +247,16 @@ window.__ModuleLoader__.load({
 
       const engine = settings && settings.engine ? settings.engine : 'glossary';
       const schedule = settings && settings.schedule !== undefined ? settings.schedule : 'hourly';
-      const isCustomSchedule = typeof schedule === 'number';
+      // 数字 0 表示「仅启动时」、-1 表示关闭，只有 >0 的分钟数才算自定义间隔
+      const isCustomSchedule = typeof schedule === 'number' && schedule > 0;
+      const scheduleChoice =
+        typeof schedule === 'number'
+          ? schedule > 0
+            ? 'custom'
+            : schedule === 0
+              ? 'startup'
+              : 'off'
+          : String(schedule);
 
       function engineCard(id, icon, name, note, hint) {
         const on = engine === id;
@@ -347,7 +356,7 @@ window.__ModuleLoader__.load({
                 'select',
                 {
                   style: S.select,
-                  value: isCustomSchedule ? 'custom' : String(schedule),
+                  value: scheduleChoice,
                   onChange: (e) => {
                     const v = e.target.value;
                     if (v === 'custom') save({ schedule: Number(customMinutes) || 30 }, '扫描频率：自定义');

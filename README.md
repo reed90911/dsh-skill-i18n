@@ -2,6 +2,8 @@
 
 自动把技能描述（`SKILL.md` frontmatter 的 `description`）翻译成中文，带设置页、可切引擎、频率可配、支持指定技能与两级回滚。
 
+当前版本 2.0.0。
+
 ## 安装
 
 ### 方式一：从 GitHub 安装（推荐）
@@ -105,6 +107,8 @@ skill_i18n({ action: "restore", fromBackup: true })
 
 配置写入 `~/.dsh/skill-i18n/settings.json`，改动**立即生效**（Host 每分钟检查一次，按当前设置判断是否到点，不需要重启）。
 
+优先级：`settings.json` > `cordis.patch.yml` 的 config > 内置默认值。设置页保存过的键以 `settings.json` 为准；patch 里的值只在 `settings.json` 没有该键时生效。
+
 ## 两种翻译引擎
 
 | 引擎 | 优点 | 代价 |
@@ -203,6 +207,10 @@ DSH 桌面版页面跑在 `dsh-app://app/`，裸相对路径会被内部协议�
 **7. 推理型模型要给足 maxTokens**
 
 `deepseek-flash` 之类会先花额度思考，`maxTokens: 300` 时正文常为空。当前设 1400 + 系统提示。
+
+**8. `description` 的读写统一在「纯文本」层**
+
+解析时去掉 YAML 引号（兼容单引号、双引号与 `>`/`|` 块标量），写入时总是单行双引号（JSON 转义，YAML 兼容）。定位按行、重组时沿用原文件的换行符，所以 CRLF 文件也能安全改写。**不要退回按字符偏移替换**——那样 CRLF 每行会少算 1 字节，把 frontmatter 写坏。
 
 ## 已知限制
 
