@@ -40,5 +40,13 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/reed90911/dsh-skill-i18n.git"
+  },
+  "homepage": "https://github.com/reed90911/dsh-skill-i18n#readme",
+  "bugs": {
+    "url": "https://github.com/reed90911/dsh-skill-i18n/issues"
   }
 }
