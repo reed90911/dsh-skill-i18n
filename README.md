@@ -81,8 +81,8 @@ skill_i18n({ action: "restore", fromBackup: true })
 | `client.js` | Client 半：设置页 | ❌ 必需 |
 | `cordis.patch.yml` | 挂载补丁，告诉 DSH 怎么加载本插件 | ❌ 必需 |
 | `package.json` | 包清单（名称、入口、`dsh` 声明） | ❌ 必需 |
-| `README.md` | 本说明 | 可删 |
-| `LICENSE` | MIT 许可证 | 可删 |
+| `README.md` | 本说明 | ✅ 可删 |
+| `LICENSE` | MIT 许可证 | ✅ 可删 |
 | `.githooks/pre-commit` | 提交前敏感信息检查（**开发用**） | ✅ 可删 |
 | `scripts/sensitive-scan.mjs` | 敏感信息扫描器（**开发用**） | ✅ 可删 |
 | `.gitignore` / `.gitattributes` | git 配置（**开发用**） | ✅ 可删 |
