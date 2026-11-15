@@ -53,6 +53,40 @@ skill_i18n({ action: "restore", fromBackup: true })
 ~/.dsh/skill-i18n/backup/         整文件备份
 ```
 
+## 提交前的敏感信息扫描
+
+仓库自带一个 pre-commit 钩子：提交前只扫描**本次暂存的文件**，命中手机号、邮箱、各类密钥就阻止提交。
+
+克隆后启用一次：
+
+```sh
+git config core.hooksPath .githooks
+```
+
+被拦截时的输出示例：
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  提交被拦截：待提交文件里发现疑似敏感信息                     │
+└──────────────────────────────────────────────────────────────┘
+
+文件：config.js
+  ⚠ 发现 1 处疑似敏感信息（样例已脱敏）：
+    [密钥赋值] config.js  x1  api***yz
+```
+
+也可以单独手动跑：
+
+```sh
+node scripts/sensitive-scan.mjs .           # 扫描整个目录
+node scripts/sensitive-scan.mjs src/a.js    # 扫描单个文件
+node scripts/sensitive-scan.mjs --all .     # 连 node_modules 一起
+```
+
+退出码：`0` 干净，`1` 有命中。确认是误报时用 `git commit --no-verify` 跳过。
+
+扫描器只输出类型、位置与脱敏样例，**不会打印原始敏感值**。
+
 ## ⚠️ 维护注意（都是实际踩过的坑）
 
 **1. Client 必须用内联样式**
