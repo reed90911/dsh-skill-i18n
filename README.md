@@ -73,6 +73,22 @@ skill_i18n({ action: "restore", fromBackup: true })
 | Node | >= 20 |
 | 网络 | 仅「模型实时翻译」需要；预制翻译表完全离线 |
 
+## 仓库结构
+
+| 文件 | 用途 | 安装后可否删除 |
+|---|---|---|
+| `index.js` | Host 半：调度、翻译、HTTP 接口、`skill_i18n` 工具 | ❌ 必需 |
+| `client.js` | Client 半：设置页 | ❌ 必需 |
+| `cordis.patch.yml` | 挂载补丁，告诉 DSH 怎么加载本插件 | ❌ 必需 |
+| `package.json` | 包清单（名称、入口、`dsh` 声明） | ❌ 必需 |
+| `README.md` | 本说明 | 可删 |
+| `LICENSE` | MIT 许可证 | 可删 |
+| `.githooks/pre-commit` | 提交前敏感信息检查（**开发用**） | ✅ 可删 |
+| `scripts/sensitive-scan.mjs` | 敏感信息扫描器（**开发用**） | ✅ 可删 |
+| `.gitignore` / `.gitattributes` | git 配置（**开发用**） | ✅ 可删 |
+
+前四项是运行必需的，删掉任意一个插件都加载不起来。后五项只服务于仓库维护——从 GitHub 或压缩包安装时会一并带上，装好之后删掉不影响插件工作。
+
 ## 设置页
 
 安装后出现在 **设置 → 技能翻译**（`settings.section`，order 90）。
