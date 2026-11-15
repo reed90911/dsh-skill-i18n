@@ -88,8 +88,20 @@ skill_i18n({ action: "restore", fromBackup: true })
 | `.githooks/pre-commit` | 提交前敏感信息检查（**开发用**） | ✅ 可删 |
 | `scripts/sensitive-scan.mjs` | 敏感信息扫描器（**开发用**） | ✅ 可删 |
 | `.gitignore` / `.gitattributes` | git 配置（**开发用**） | ✅ 可删 |
+| `docs/` | 海报与配图（**文档**） | ✅ 可删 |
 
-前四项是运行必需的，删掉任意一个插件都加载不起来。后五项只服务于仓库维护——从 GitHub 或压缩包安装时会一并带上，装好之后删掉不影响插件工作。
+前四项是运行必需的，删掉任意一个插件都加载不起来。后六项只服务于仓库维护——从 GitHub 或压缩包安装时会一并带上，装好之后删掉不影响插件工作。
+
+## 海报
+
+| 文件 | 用途 |
+|---|---|
+| `docs/poster-v1-original.png` | **最初宣传海报**（v1.0.0），介绍插件能力：双引擎、频率可配、定向翻译、两级回滚 |
+| `docs/poster-v2-update.png` | **v2.0.0 更新内容报告**，列出这次修复的四个重点：还原可信、换行安全、配置生效、写入可靠 |
+
+<img src="docs/poster-v1-original.png" width="600" alt="最初宣传海报（v1.0.0）">
+
+更新内容报告：[docs/poster-v2-update.png](docs/poster-v2-update.png)
 
 ## 设置页
 
