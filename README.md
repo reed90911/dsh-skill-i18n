@@ -2,6 +2,54 @@
 
 自动把技能描述（`SKILL.md` frontmatter 的 `description`）翻译成中文，带设置页、可切引擎、频率可配、支持指定技能与两级回滚。
 
+## 安装
+
+### 方式一：从 GitHub 安装（推荐）
+
+```powershell
+dsh plugin --profile <你的 profile> add github:reed90911/dsh-skill-i18n
+```
+
+把 `<你的 profile>` 换成实际的 profile 名，通常是 `desktop` 或 `web`。
+查看现有 profile：
+
+```powershell
+dir ~\.dsh\profiles
+```
+
+安装完成后**重启 DSH**，左下角 ⚙ 设置里会出现「技能翻译」。
+
+### 方式二：从本地目录安装（适合改代码）
+
+```powershell
+git clone https://github.com/reed90911/dsh-skill-i18n.git
+dsh plugin --profile desktop add C:\path\to\dsh-skill-i18n
+```
+
+这种方式下修改代码后，执行一次插件热重载即可生效，不需要重新安装。
+
+### 卸载
+
+```powershell
+dsh plugin --profile desktop remove dsh-skill-i18n
+```
+
+卸载前建议先把技能描述还原，否则被翻译过的描述会留在文件里：
+
+```
+skill_i18n({ action: "restore", fromBackup: true })
+```
+
+也可以直接删除数据目录 `~/.dsh/skill-i18n/`（配置、状态与备份都在这里）。
+
+### 运行要求
+
+| 项目 | 要求 |
+|---|---|
+| DSH | 支持 bundle 插件与 `settings.section` 插槽的版本 |
+| Node | >= 20 |
+| 网络 | 仅「模型实时翻译」需要；预制翻译表完全离线 |
+
 ## 设置页
 
 安装后出现在 **设置 → 技能翻译**（`settings.section`，order 90）。
