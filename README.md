@@ -6,11 +6,28 @@
 
 ## 安装
 
-### 方式一：从 GitHub 安装（推荐）
+### 方式一：从 npm 安装（推荐）
+
+```powershell
+dsh plugin --profile <你的 profile> add dsh-skill-i18n
+```
+
+走 npm registry，装到的是最新发布版（[npmjs.com/package/dsh-skill-i18n](https://www.npmjs.com/package/dsh-skill-i18n)）。
+国内网络如果拉取慢，可以临时换镜像：
+
+```powershell
+npm config set registry https://registry.npmmirror.com
+```
+
+安装完成后**重启 DSH**，左下角 ⚙ 设置里会出现「技能翻译」。
+
+### 方式二：从 GitHub 安装
 
 ```powershell
 dsh plugin --profile <你的 profile> add github:reed90911/dsh-skill-i18n
 ```
+
+适合想直接跟 `main` 分支、或 npm 不可用的环境。
 
 把 `<你的 profile>` 换成实际的 profile 名，通常是 `desktop` 或 `web`。
 查看现有 profile：
@@ -21,7 +38,7 @@ dir ~\.dsh\profiles
 
 安装完成后**重启 DSH**，左下角 ⚙ 设置里会出现「技能翻译」。
 
-### 方式二：从本地目录安装（适合改代码）
+### 方式三：从本地目录安装（适合改代码）
 
 ```powershell
 git clone https://github.com/reed90911/dsh-skill-i18n.git
@@ -30,7 +47,7 @@ dsh plugin --profile desktop add C:\path\to\dsh-skill-i18n
 
 这种方式下修改代码后，执行一次插件热重载即可生效，不需要重新安装。
 
-### 方式三：下载压缩包安装（网络受限时）
+### 方式四：下载压缩包安装（网络受限时）
 
 有些网络环境下 `git clone` 会失败（报 `Connection was reset` 或 `Could not connect to server`），这时直接下载压缩包绕过 git 协议：
 
@@ -96,12 +113,14 @@ skill_i18n({ action: "restore", fromBackup: true })
 
 | 文件 | 用途 |
 |---|---|
+| `docs/poster-v2-promo.png` | **v2.0.0 宣传海报**，含 npm 与 GitHub 两条安装方式 |
 | `docs/poster-v1-original.png` | **最初宣传海报**（v1.0.0），介绍插件能力：双引擎、频率可配、定向翻译、两级回滚 |
 | `docs/poster-v2-update.png` | **v2.0.0 更新内容报告**，列出这次修复的四个重点：还原可信、换行安全、配置生效、写入可靠 |
 
-<img src="https://raw.githubusercontent.com/reed90911/dsh-skill-i18n/main/docs/poster-v1-original.png" width="600" alt="最初宣传海报（v1.0.0）">
+<img src="https://raw.githubusercontent.com/reed90911/dsh-skill-i18n/main/docs/poster-v2-promo.png" width="600" alt="v2.0.0 宣传海报">
 
-更新内容报告：[docs/poster-v2-update.png](https://github.com/reed90911/dsh-skill-i18n/blob/main/docs/poster-v2-update.png)
+[最初宣传海报](https://github.com/reed90911/dsh-skill-i18n/blob/main/docs/poster-v1-original.png) ·
+[更新内容报告](https://github.com/reed90911/dsh-skill-i18n/blob/main/docs/poster-v2-update.png)
 
 ## 设置页
 
