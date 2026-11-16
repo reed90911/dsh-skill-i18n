@@ -99,9 +99,9 @@ skill_i18n({ action: "restore", fromBackup: true })
 | `docs/poster-v1-original.png` | **最初宣传海报**（v1.0.0），介绍插件能力：双引擎、频率可配、定向翻译、两级回滚 |
 | `docs/poster-v2-update.png` | **v2.0.0 更新内容报告**，列出这次修复的四个重点：还原可信、换行安全、配置生效、写入可靠 |
 
-<img src="docs/poster-v1-original.png" width="600" alt="最初宣传海报（v1.0.0）">
+<img src="https://raw.githubusercontent.com/reed90911/dsh-skill-i18n/main/docs/poster-v1-original.png" width="600" alt="最初宣传海报（v1.0.0）">
 
-更新内容报告：[docs/poster-v2-update.png](docs/poster-v2-update.png)
+更新内容报告：[docs/poster-v2-update.png](https://github.com/reed90911/dsh-skill-i18n/blob/main/docs/poster-v2-update.png)
 
 ## 设置页
 
