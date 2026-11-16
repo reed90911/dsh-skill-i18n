@@ -4,14 +4,16 @@
 
 | 文件 | 类型 | 内容 |
 |---|---|---|
-| `poster-v1-original.png` | **最初宣传海报** | v1.0.0 发布时使用：双引擎、频率可配、定向翻译、两级回滚 |
+| `poster-v2-promo.png` | **v2.0.0 宣传海报** | 双引擎、频率可配、定向翻译、两级回滚；install 块同时给出 npm 与 GitHub 两条安装命令 |
+| `poster-v1-original.png` | **最初宣传海报** | v1.0.0 发布时使用，只给了 GitHub 安装方式 |
 | `poster-v2-update.png` | **v2.0.0 更新内容报告** | 这次修复的四个重点：还原可信、换行安全、配置生效、写入可靠 |
 
-> 第一张是宣传海报（介绍能力），第二张是更新报告（说明改了什么），用途不同，不要混用。
+> `poster-v2-promo.png` 是最新的宣传海报；`poster-v2-update.png` 是更新报告。两者用途不同，不要混用。
 
 ## 使用场景
 
-- `poster-v1-original.png`：README 展示、仓库社交预览、分享给新用户
+- `poster-v2-promo.png`：README 展示、仓库社交预览、分享给新用户（推荐）
+- `poster-v1-original.png`：历史版本存档
 - `poster-v2-update.png`：版本发布说明、更新公告、CHANGELOG 配图
 
 ## 说明
