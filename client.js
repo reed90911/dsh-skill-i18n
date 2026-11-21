@@ -183,18 +183,33 @@ window.__ModuleLoader__.load({
       const [settings, setSettings] = React.useState(null);
       const [busy, setBusy] = React.useState('');
       const [msg, setMsg] = React.useState('');
-      const [skillInput, setSkillInput] = React.useState('');
+      const [progress, setProgress] = React.useState(null);
+      const [skillList, setSkillList] = React.useState([]);
+      const [selectedSkills, setSelectedSkills] = React.useState([]);
+      const doneRef = React.useRef('');
+      const saveTimer = React.useRef(null);
+      const selectedRef = React.useRef([]);
+      const running = Boolean(progress && progress.job && !progress.job.finishedAt);
       const [customMinutes, setCustomMinutes] = React.useState('30');
 
       async function refresh() {
         try {
-          const [s, cfg] = await Promise.all([api('/skill-i18n/status'), api('/skill-i18n/settings')]);
+          const [s, cfg, sk] = await Promise.all([
+            api('/skill-i18n/status'),
+            api('/skill-i18n/settings'),
+            api('/skill-i18n/skills'),
+          ]);
           if (s && s.ok) setStatus(s);
           if (cfg && cfg.settings) {
             setSettings(cfg.settings);
             const sc = cfg.settings.schedule;
             if (typeof sc === 'number' && sc > 0) setCustomMinutes(String(sc));
-            setSkillInput((cfg.settings.skills || []).join(', '));
+          }
+          if (sk && sk.skills) {
+            setSkillList(sk.skills);
+            const names = sk.skills.filter((x) => x.selected).map((x) => x.name);
+            selectedRef.current = names;
+            setSelectedSkills(names);
           }
         } catch (e) {
           setMsg('读取状态失败：' + (e && e.message ? e.message : e) + '\n诊断：' + JSON.stringify(diag(), null, 2));
@@ -204,6 +219,26 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         refresh();
       }, []);
+
+      // 翻译中 800ms 轮询；空闲时 4s 一次，避免没有任务时的无意义请求
+      React.useEffect(() => {
+        const interval = running ? 800 : 4000;
+        const timer = setInterval(async () => {
+          try {
+            const p = await api('/skill-i18n/progress');
+            if (!p || !p.ok) return;
+            setProgress(p);
+            const j = p.job;
+            if (j && j.finishedAt && doneRef.current !== j.id) {
+              doneRef.current = j.id;
+              refresh();
+            }
+          } catch {
+            /* 轮询失败忽略，下一轮再试 */
+          }
+        }, interval);
+        return () => clearInterval(timer);
+      }, [running]);
 
       async function save(patch, note) {
         setBusy('save');
@@ -229,19 +264,53 @@ window.__ModuleLoader__.load({
         setBusy(action);
         setMsg('执行中…');
         try {
-          const skills = skillInput.trim()
-            ? skillInput.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean)
-            : undefined;
           const r = await api('/skill-i18n/run', {
             method: 'POST',
-            body: JSON.stringify({ action, skills, ...(extra || {}) }),
+            body: JSON.stringify({
+              action,
+              skills: selectedSkills.length ? selectedSkills : undefined,
+              ...(extra || {}),
+            }),
           });
+          if (r && r.ok && r.started) {
+            setMsg('翻译已开始，进度见下方');
+            if (r.job) setProgress({ ok: true, busy: true, job: r.job });
+            setBusy('');
+            return;
+          }
           setMsg(JSON.stringify(r, null, 2));
           refresh();
         } catch (e) {
           setMsg('执行失败：' + (e && e.message ? e.message : e));
         } finally {
           setBusy('');
+        }
+      }
+
+      function queueSave(next) {
+        if (saveTimer.current) clearTimeout(saveTimer.current);
+        saveTimer.current = setTimeout(() => {
+          save({ skills: next }, next.length ? '已选 ' + next.length + ' 个技能' : '已切回全部技能');
+        }, 450);
+      }
+
+      function applySelection(next) {
+        selectedRef.current = next;
+        setSelectedSkills(next);
+        queueSave(next);
+      }
+
+      function toggleSkill(name, checked) {
+        const cur = selectedRef.current;
+        const next = checked ? (cur.includes(name) ? cur : cur.concat(name)) : cur.filter((n) => n !== name);
+        applySelection(next);
+      }
+
+      async function cancelRun() {
+        try {
+          await api('/skill-i18n/cancel', { method: 'POST', body: '{}' });
+        } catch (e) {
+          setMsg('取消失败：' + (e && e.message ? e.message : e));
         }
       }
 
@@ -258,6 +327,40 @@ window.__ModuleLoader__.load({
               : 'off'
           : String(schedule);
 
+      function progressBar() {
+        const j = progress && progress.job;
+        if (!j) return null;
+        const pct = j.total > 0 ? Math.round((j.done / j.total) * 100) : (j.finishedAt ? 100 : 0);
+        const finished = Boolean(j.finishedAt);
+        const text = finished
+          ? (j.canceled ? '已取消' : '已完成') + ' · ' + j.done + '/' + j.total +
+            ' · 新译 ' + j.translated + ' · 写回 ' + (j.fromCache || 0) +
+            ' · 跳过 ' + j.skipped + (j.failed ? ' · 失败 ' + j.failed : '')
+          : '翻译中 ' + j.done + '/' + j.total + (j.current ? ' · ' + j.current : '');
+        return h(
+          'div',
+          { style: { ...S.item, ...S.itemStatic, flexDirection: 'column', alignItems: 'stretch', gap: '8px' } },
+          h(
+            'div',
+            { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+            h('span', { style: S.ico }, h(Icon, { name: 'clock' })),
+            h('span', { style: { ...S.name, flex: 1 } }, text),
+          ),
+          h(
+            'div',
+            { style: { height: '6px', borderRadius: '3px', background: 'rgba(255,255,255,0.10)', overflow: 'hidden' } },
+            h('div', {
+              style: {
+                width: pct + '%',
+                height: '100%',
+                background: j.canceled ? '#f87171' : '#3b82f6',
+                transition: 'width 0.2s',
+              },
+            }),
+          ),
+        );
+      }
+
       function engineCard(id, icon, name, note, hint) {
         const on = engine === id;
         return h(
@@ -266,7 +369,7 @@ window.__ModuleLoader__.load({
             style: { ...S.item, ...(on ? S.itemOn : {}), ...S.clickable },
             onClick: () => {
               if (busy) return;
-              save({ engine: id }, '翻译引擎已切换：' + name);
+              save({ engine: id }, '翻译引擎已切换：' + name + '（点「立即翻译」会按新引擎重译）');
             },
           },
           h('span', { style: S.ico }, h(Icon, { name: icon })),
@@ -401,30 +504,59 @@ window.__ModuleLoader__.load({
         h(
           'section',
           { style: S.section },
-          sectionTitle('只翻译指定技能'),
+          sectionTitle('选择要翻译的技能'),
           h(
             'div',
             { style: S.list },
             h(
               'div',
-              { style: { ...S.item, ...S.itemStatic } },
-              h('span', { style: S.ico }, h(Icon, { name: 'tag' })),
+              { style: { ...S.item, ...S.itemStatic, flexDirection: 'column', alignItems: 'stretch', gap: '10px' } },
               h(
-                'span',
-                { style: S.field },
-                h('input', {
-                  style: S.input,
-                  placeholder: '留空表示全部技能，多个用逗号分隔',
-                  value: skillInput,
-                  onChange: (e) => setSkillInput(e.target.value),
-                  onBlur: () =>
-                    save(
-                      { skills: skillInput.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean) },
-                      '技能范围已保存',
-                    ),
-                }),
-                h('span', { style: S.note }, '例如：resume-tailor, moli-browser'),
+                'div',
+                { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+                h('span', { style: S.ico }, h(Icon, { name: 'tag' })),
+                h(
+                  'span',
+                  { style: { ...S.name, flex: 1 } },
+                  selectedSkills.length === 0
+                    ? '范围：全部技能（未勾选）'
+                    : selectedSkills.length >= skillList.length
+                      ? '范围：全部技能（已全选 ' + skillList.length + ' 个）'
+                      : '范围：已选 ' + selectedSkills.length + ' / ' + skillList.length + ' 个',
+                ),
+                h('button', { style: S.btn, onClick: () => applySelection(skillList.map((x) => x.name)) }, '全选'),
+                h('button', { style: S.btn, onClick: () => applySelection([]) }, '全不选'),
+                h(
+                  'button',
+                  {
+                    style: S.btn,
+                    onClick: () =>
+                      applySelection(skillList.filter((x) => !selectedSkills.includes(x.name)).map((x) => x.name)),
+                  },
+                  '反选',
+                ),
               ),
+              h(
+                'div',
+                { style: { display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '280px', overflow: 'auto', paddingRight: '4px' } },
+                skillList.length === 0
+                  ? h('span', { style: S.note }, '正在读取技能列表…')
+                  : skillList.map((s) =>
+                      h(
+                        'label',
+                        { key: s.name, style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', cursor: 'pointer' } },
+                        h('input', {
+                          type: 'checkbox',
+                          checked: selectedSkills.includes(s.name),
+                          onChange: (e) => toggleSkill(s.name, e.target.checked),
+                        }),
+                        h('span', { style: { flex: 1 } }, s.name),
+                        s.chinese === true ? h('span', { style: S.note }, '中文') : null,
+                        s.chinese === false ? h('span', { style: { ...S.note, color: '#f87171' } }, '英文') : null,
+                      ),
+                    ),
+              ),
+              h('p', { style: S.hint }, '不勾选 = 处理全部技能；勾选 = 只处理选中的。「全选」与「不勾选」结果相同，只是显式列出全部。'),
             ),
           ),
         ),
@@ -438,17 +570,21 @@ window.__ModuleLoader__.load({
             { style: S.actions },
             h(
               'button',
-              { style: { ...S.btn, ...S.btnPrimary }, disabled: Boolean(busy), onClick: () => run('translate') },
-              busy === 'translate' ? '翻译中…' : '立即翻译',
+              { style: { ...S.btn, ...S.btnPrimary }, disabled: Boolean(busy) || running, onClick: () => run('translate') },
+              running ? '翻译中…' : '立即翻译',
             ),
-            h('button', { style: S.btn, disabled: Boolean(busy), onClick: () => run('translate', { force: true }) }, '强制重译'),
-            h('button', { style: S.btn, disabled: Boolean(busy), onClick: () => run('restore') }, '还原为英文'),
+            running
+              ? h('button', { style: { ...S.btn, ...S.btnDanger }, onClick: cancelRun }, '取消翻译')
+              : null,
+            h('button', { style: S.btn, disabled: Boolean(busy) || running, onClick: () => run('translate', { force: true }) }, '强制重译'),
+            h('button', { style: S.btn, disabled: Boolean(busy) || running, onClick: () => run('restore') }, '还原为英文'),
             h(
               'button',
-              { style: { ...S.btn, ...S.btnDanger }, disabled: Boolean(busy), onClick: () => run('restore', { fromBackup: true }) },
+              { style: { ...S.btn, ...S.btnDanger }, disabled: Boolean(busy) || running, onClick: () => run('restore', { fromBackup: true }) },
               '整文件回滚',
             ),
           ),
+          progressBar(),
           h('p', { style: S.hint }, '「还原为英文」只改描述字段；「整文件回滚」用首次翻译前的完整副本覆盖整个 SKILL.md。'),
         ),
 

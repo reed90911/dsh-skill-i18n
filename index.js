@@ -85,6 +85,17 @@ function log(...args) {
   console.error(MODULE, ...args);
 }
 
+/** 诊断日志：插件加载/路由注册的关键状态写文件，便于排查“设置页 404”。 */
+function debugLog(msg) {
+  try {
+    const dir = join(dshHome(), 'skill-i18n');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'debug.log'), new Date().toISOString() + ' ' + msg + '\n', { flag: 'a' });
+  } catch {
+    /* 诊断失败不影响主流程 */
+  }
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -306,6 +317,35 @@ export default {
     let lastRunAt = 0;
     let startedAt = Date.now();
     let busy = false;
+    // 翻译任务进度与取消：设置页轮询 /progress，翻译中可 POST /cancel
+    let job = null;
+    let cancelRequested = false;
+    let jobSeq = 0;
+
+    function startJob(total, engine) {
+      job = {
+        id: 'job-' + ++jobSeq,
+        engine,
+        total,
+        done: 0,
+        translated: 0,
+        fromCache: 0,
+        skipped: 0,
+        failed: 0,
+        current: '',
+        canceled: false,
+        ok: null,
+        error: null,
+        startedAt: new Date().toISOString(),
+        finishedAt: null,
+      };
+      cancelRequested = false;
+      return job;
+    }
+
+    function jobSnapshot() {
+      return job ? { ...job } : null;
+    }
 
     const translator = () => ctx.get('translator');
 
@@ -395,8 +435,8 @@ export default {
       return { error: '模型实时翻译不可用：没有可用的 llm 模型' };
     }
 
-    /** 翻译：only 为 null 时用 settings.skills（空数组视为全部）。 */
-    async function runTranslate({ force = false, only = undefined } = {}) {
+    /** 翻译：only 为 null 时用 settings.skills（空数组视为全部）。manual=true 表示用户主动触发，忽略 restored 保护。 */
+    async function runTranslate({ force = false, only = undefined, manual = false } = {}) {
       if (busy) return { ok: false, error: '已有翻译任务在执行' };
       busy = true;
       try {
@@ -411,8 +451,13 @@ export default {
           return { ok: true, total: 0, translated: 0, skipped: 0, failed: [], notFound, engine: settings.engine, note: '没有可处理的技能' };
         }
 
+        startJob(skills.length, settings.engine);
         const engineInfo = await resolveEngine(settings);
-        if (engineInfo.error) return { ok: false, error: engineInfo.error, total: skills.length };
+        if (engineInfo.error) {
+          job.error = engineInfo.error;
+          return { ok: false, error: engineInfo.error, total: skills.length };
+        }
+        if (job) job.engine = engineInfo.kind;
 
         const state = readState();
         let translated = 0;
@@ -421,7 +466,16 @@ export default {
         let backedUp = 0;
         const failed = [];
 
-        for (const skill of skills) {
+        for (let i = 0; i < skills.length; i++) {
+          const skill = skills[i];
+          if (cancelRequested) {
+            if (job) job.canceled = true;
+            break;
+          }
+          if (job) {
+            job.done = i;
+            job.current = skill.name;
+          }
           let text;
           try {
             text = readFileSync(skill.file, 'utf8');
@@ -435,14 +489,20 @@ export default {
             continue;
           }
           const current = desc.raw;
-          if (!force && CJK.test(current)) {
+          const prev = state.skills[skill.name];
+          // 当前已是中文、但记录里的引擎与当前引擎不同：手动翻译时按原文重译，
+          // 否则会把中文再“翻译”一遍，内容看起来没有变化
+          const engineChanged = Boolean(
+            manual && prev && prev.engine && prev.engine !== settings.engine && CJK.test(current),
+          );
+          // 强制重译同样按原文重译
+          const retranslate = force || engineChanged;
+          if (!force && CJK.test(current) && !engineChanged) {
             skipped++;
             continue;
           }
-          const prev = state.skills[skill.name];
-          // 还原过的技能：原文未变就不再自动翻回去。必须在翻译之前判断——
-          // 以前放在缓存分支里，而缓存分支要求 prev.original === current，带引号时永远不成立。
-          if (!force && prev && prev.restored && prev.original === current) {
+          // 还原过的技能：自动调度时原文未变就不再翻回去；用户手动点「立即翻译」则允许恢复（manual=true）
+          if (!force && !manual && prev && prev.restored && prev.original === current) {
             skipped++;
             continue;
           }
@@ -451,13 +511,16 @@ export default {
               if (backupSkill(skill.name, text)) backedUp++;
               writeFileSync(skill.file, setDescription(text, prev.translated), 'utf8');
               restoredFromCache++;
+              // 文件已恢复成中文，还原标记随之失效（否则状态与实际不符）
+              prev.restored = false;
             } catch (e) {
               failed.push({ skill: skill.name, error: '写回缓存失败: ' + (e.message || e) });
             }
             continue;
           }
           try {
-            const zh = await translateOne(skill.name, current, settings, engineInfo);
+            const input = retranslate && CJK.test(current) && prev && prev.original ? prev.original : current;
+            const zh = await translateOne(skill.name, input, settings, engineInfo);
             if (!zh || !CJK.test(zh)) {
               failed.push({ skill: skill.name, error: '翻译结果为空或不含中文' });
               continue;
@@ -465,7 +528,7 @@ export default {
             if (backupSkill(skill.name, text)) backedUp++;
             writeFileSync(skill.file, setDescription(text, zh), 'utf8');
             state.skills[skill.name] = {
-              original: current,
+              original: input,
               originalHash: sha256(current),
               translated: zh,
               restored: false,
@@ -481,6 +544,16 @@ export default {
 
         writeState(state);
         lastRunAt = Date.now();
+        if (job) {
+          job.done = Math.min(skills.length, translated + restoredFromCache + skipped + failed.length);
+          job.translated = translated;
+          job.fromCache = restoredFromCache;
+          job.skipped = skipped;
+          job.failed = failed.length;
+          job.ok = true;
+          job.current = '';
+          job.finishedAt = new Date().toISOString();
+        }
         return {
           ok: true,
           engine: engineInfo.kind,
@@ -491,9 +564,15 @@ export default {
           backedUp,
           failed,
           notFound,
+          canceled: job ? job.canceled : false,
         };
       } finally {
         busy = false;
+        // 异常路径兜底：进度接口不能永远停在“进行中”
+        if (job && !job.finishedAt) {
+          job.finishedAt = new Date().toISOString();
+          if (job.ok === null) job.ok = false;
+        }
       }
     }
 
@@ -621,10 +700,30 @@ export default {
       };
     }
 
+    /** 技能清单：供设置页多选（名称、是否已是中文、是否已记录、是否在筛选内）。 */
+    function listSkills() {
+      const settings = currentSettings();
+      const selected = normalizeOnly(settings.skills) || [];
+      const state = readState();
+      return scanSkills(skillDir).map((s) => {
+        let chinese = null;
+        try {
+          const d = getDescription(readFileSync(s.file, 'utf8'));
+          chinese = d ? CJK.test(d.raw) : null;
+        } catch {
+          chinese = null;
+        }
+        return {
+          name: s.name,
+          chinese,
+          tracked: Boolean(state.skills[s.name]),
+          selected: selected.includes(s.name),
+        };
+      });
+    }
+
     // ---- 供设置页调用的 HTTP 接口 ----
-    const webServer = ctx.get('webServer');
-    if (webServer) {
-      const routes = [
+    const routes = [
         {
           path: '/skill-i18n/status',
           handler: (req, res) => sendJson(res, 200, runStatus()),
@@ -672,7 +771,10 @@ export default {
               return;
             }
             if (body.action === 'translate') {
-              sendJson(res, 200, await runTranslate({ force: Boolean(body.force), only: body.skills }));
+              // 后台启动并立即返回，进度交给 /progress 轮询，避免长请求卡住设置页
+              const pending = runTranslate({ force: Boolean(body.force), only: body.skills, manual: true });
+              pending.catch((e) => log('translate failed:', e && e.message ? e.message : e));
+              sendJson(res, 202, { ok: true, started: true, job: jobSnapshot() });
             } else if (body.action === 'restore') {
               sendJson(res, 200, await runRestore({ only: body.skills, fromBackup: Boolean(body.fromBackup) }));
             } else if (body.action === 'status') {
@@ -682,14 +784,55 @@ export default {
             }
           },
         },
+        {
+          path: '/skill-i18n/progress',
+          handler: (req, res) => sendJson(res, 200, { ok: true, busy, job: jobSnapshot() }),
+        },
+        {
+          path: '/skill-i18n/cancel',
+          handler: (req, res) => {
+            if (!busy || !job || job.finishedAt) {
+              sendJson(res, 200, { ok: true, canceled: false, note: '没有正在执行的任务' });
+              return;
+            }
+            cancelRequested = true;
+            sendJson(res, 200, { ok: true, canceled: true, job: jobSnapshot() });
+          },
+        },
+        {
+          path: '/skill-i18n/skills',
+          handler: (req, res) => sendJson(res, 200, { ok: true, skills: listSkills() }),
+        },
       ];
+
+    function registerRoutes(server, owner) {
+      const effectOf = owner && typeof owner.effect === 'function' ? owner.effect.bind(owner) : ctx.effect.bind(ctx);
       for (const r of routes) {
         // 同时挂载 /api 前缀与无前缀两种路径：不同宿主（Electron 内嵌页 / 浏览器页）网关不同
         for (const p of [r.path, '/api' + r.path]) {
-          ctx.effect(() => webServer.register({ kind: 'exact', path: p, handler: r.handler }));
+          effectOf(() => server.register({ kind: 'exact', path: p, handler: r.handler }));
         }
       }
+      debugLog('http routes registered: ' + routes.length * 2 + ' paths');
       log('http routes: GET /skill-i18n/status, GET|POST /skill-i18n/settings, POST /skill-i18n/run');
+    }
+
+    // 新版 DSH 里 webServer 可能晚于插件就绪（apply 时 ctx.get 拿不到）。
+    // 先同步尝试；拿不到就等它就绪后再挂路由，避免设置页一直 404。
+    const webServer = ctx.get('webServer');
+    debugLog('apply: webServer=' + Boolean(webServer) + ', ctx.inject=' + typeof ctx.inject);
+    if (webServer) {
+      registerRoutes(webServer, ctx);
+    } else if (typeof ctx.inject === 'function') {
+      ctx.inject(['webServer'], (inner) => {
+        const server =
+          (inner && typeof inner.get === 'function' ? inner.get('webServer') : undefined) ||
+          (inner && inner.webServer);
+        if (server) registerRoutes(server, inner || ctx);
+        else debugLog('deferred inject ran but webServer still missing');
+      });
+    } else {
+      debugLog('webServer unavailable and ctx.inject missing; tool-only mode');
     }
 
     // ---- 工具（与设置页共用同一套逻辑）----
@@ -702,9 +845,13 @@ export default {
         parameters: {
           type: 'object',
           properties: {
-            action: { type: 'string', enum: ['status', 'translate', 'restore'] },
+            action: { type: 'string', enum: ['status', 'translate', 'restore', 'progress', 'cancel'] },
             skills: { type: 'array', items: { type: 'string' }, description: '只处理这些技能（省略则按设置）' },
             force: { type: 'boolean', description: 'translate 时强制重译' },
+            manual: {
+              type: 'boolean',
+              description: 'translate 时把还原过的技能也翻回去（默认 false，尊重「还原后不自动翻回」的保护）',
+            },
             fromBackup: { type: 'boolean', description: 'restore 时用完整备份覆盖' },
           },
           required: ['action'],
@@ -720,8 +867,19 @@ export default {
           const action = args && args.action;
           const skills = args && args.skills ? normalizeOnly(args.skills) : undefined;
           if (action === 'status') return runStatus();
-          if (action === 'translate') return runTranslate({ force: Boolean(args && args.force), only: skills });
+          if (action === 'translate')
+            return runTranslate({
+              force: Boolean(args && args.force),
+              only: skills,
+              manual: Boolean(args && args.manual),
+            });
           if (action === 'restore') return runRestore({ only: skills, fromBackup: Boolean(args && args.fromBackup) });
+          if (action === 'progress') return { ok: true, busy, job: jobSnapshot() };
+          if (action === 'cancel') {
+            if (!busy || !job || job.finishedAt) return { ok: true, canceled: false, note: '没有正在执行的任务' };
+            cancelRequested = true;
+            return { ok: true, canceled: true, job: jobSnapshot() };
+          }
           return { ok: false, error: '未知 action: ' + String(action) };
         },
       }),
